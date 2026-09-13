@@ -1,7 +1,8 @@
 from glob import glob
 
-from drawio.entities.drawio import DrawIO
 import pywinauto
+
+from drawio.entities.drawio import DrawIO
 
 
 class DrawIOApp(DrawIO):
@@ -20,9 +21,7 @@ class DrawIOApp(DrawIO):
         return self.window
 
     def __find_drawio_execute_path(self):
-        window_app_paths = glob(
-            r"C:\Program Files\WindowsApps\draw.io*", recursive=True
-        )
+        window_app_paths = glob(r"C:\Program Files\WindowsApps\draw.io*", recursive=True)
         if not window_app_paths:
             raise Exception("Draw.io is not installed")
         return window_app_paths[0]
@@ -35,8 +34,6 @@ class DrawIOApp(DrawIO):
         self.window.print_control_identifiers()
 
         # find "Insert (Doubleclick to insert text)"
-        insert_button = self.window.child_window(
-            title="Insert (Doubleclick to insert text)"
-        )
+        insert_button = self.window.child_window(title="Insert (Doubleclick to insert text)")
         # click
         insert_button.click_input()

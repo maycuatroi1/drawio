@@ -1,3 +1,2 @@
-shortuuid
-selenium
-webdriver-manager
+# Native XML generation uses only the Python standard library.
+# Optional dependencies live in setup.py extras: browser, pdf, excel.

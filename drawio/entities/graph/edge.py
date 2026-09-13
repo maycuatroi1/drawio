@@ -1,37 +1,33 @@
-import typing
-
-if typing.TYPE_CHECKING:
-    from .node import Node
+"""Legacy graph connections, compared by node identity rather than labels."""
 
 
 class Edge:
-    def __init__(self, parent: "Node", child: typing.Union["Node", None], label=None):
+    def __init__(self, parent, child, label=None):
         self.label = label
         self.parent = parent
         self.child = child
 
-    def __rshift__(self, other: typing.Union["Node"]):
-        """
-        If is node, create new edge and add child node
-        """
+    def __rshift__(self, other):
+        from drawio.entities.graph.node import Node
+
+        if not isinstance(other, Node):
+            return NotImplemented
+        if self.child is not None:
+            raise ValueError("This edge already has a target")
+        graph = self.parent._graph_for(other)
         self.child = other
-        self.child.add_parent_edge(self)
-        return self.child
+        graph.add_edge(self)
+        return other
 
     def __repr__(self):
+        child = self.child.name if self.child is not None else "?"
         if self.label:
-            return f"{self.parent.name}--{self.label}-->{self.child.name}"
-        else:
-            return f"{self.parent.name}-->{self.child.name}"
+            return f"{self.parent.name}--{self.label}-->{child}"
+        return f"{self.parent.name}-->{child}"
 
     def __eq__(self, other):
-        child_name = self.child.name if self.child else None
-        other_child_name = other.child.name if other.child else None
-        parent_name = self.parent.name if self.parent else None
-        other_parent_name = other.parent.name if other.parent else None
-        label = self.label if self.label else None
+        if not isinstance(other, Edge):
+            return NotImplemented
         return (
-            child_name == other_child_name
-            and parent_name == other_parent_name
-            and label == other.label
+            self.parent is other.parent and self.child is other.child and self.label == other.label
         )

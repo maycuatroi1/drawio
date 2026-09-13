@@ -1,6 +1,6 @@
-"""Entry point for drawio."""
+"""Entry point for python -m drawio."""
 
-from .cli import main  # pragma: no cover
+from .cli import main
 
-if __name__ == "__main__":  # pragma: no cover
-    main()
+if __name__ == "__main__":
+    raise SystemExit(main())

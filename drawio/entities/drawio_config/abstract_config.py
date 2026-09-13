@@ -7,7 +7,7 @@ class AbstractConfig:
 
     def to_config_string(self):
         config_string = ""
-        params = self.__dict__
+        params = self.__dict__.copy()
         # remove 'column_names' from params
         column_names = params.pop("column_names", None)
         items = list(params.items())

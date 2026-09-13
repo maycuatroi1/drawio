@@ -1,5 +1,11 @@
 include LICENSE
 include HISTORY.md
 include Containerfile
+include README.md
+include requirements*.txt
+include mkdocs.yml
+graft examples
+graft docs
 graft tests
 graft drawio
+global-exclude __pycache__ *.py[cod]

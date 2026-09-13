@@ -2,6 +2,7 @@
 
 import io
 import os
+
 from setuptools import find_packages, setup
 
 
@@ -26,20 +27,28 @@ def read_requirements(path):
     return [
         line.strip()
         for line in read(path).split("\n")
-        if not line.startswith(('"', "#", "-", "git+"))
+        if line.strip() and not line.startswith(('"', "#", "-", "git+"))
     ]
 
 
 setup(
     name="drawio-python",
     version=read("drawio", "VERSION"),
-    description="Awesome drawio created by Nguyen Anh Binh",
-    url="https://github.com/maycuatroi/drawio/",
+    description="Create editable, multi-page draw.io diagrams with native Python XML",
+    url="https://github.com/maycuatroi1/drawio/",
     long_description=read("README.md"),
     long_description_content_type="text/markdown",
     author="Nguyen Anh Binh",
     packages=find_packages(exclude=["tests", ".github"]),
+    python_requires=">=3.9",
+    include_package_data=True,
     install_requires=read_requirements("requirements.txt"),
     entry_points={"console_scripts": ["drawio = drawio.__main__:main"]},
-    extras_require={"test": read_requirements("requirements-test.txt")},
+    extras_require={
+        "test": read_requirements("requirements-test.txt"),
+        "browser": ["selenium>=4", "webdriver-manager>=4"],
+        "pdf": ["graphviz>=0.20"],
+        "excel": ["pandas>=1.5", "xlsxwriter>=3"],
+        "docs": ["mkdocs>=1.5"],
+    },
 )

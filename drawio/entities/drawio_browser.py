@@ -1,3 +1,8 @@
+"""Legacy Selenium integration; install drawio-python[browser] to use it.
+
+Native Document.save() and Graph.render() do not import this module.
+"""
+
 import glob
 import os
 from time import sleep
@@ -174,9 +179,7 @@ class DrawIOBrowser(DrawIO):
         text_area.send_keys(text)
         if render_style != "list":
             raise NotImplementedError("Only list type is supported")
-        self.driver.find_element(
-            By.XPATH, "/html/body/div[11]/div/button[2]"
-        ).click()  # Import
+        self.driver.find_element(By.XPATH, "/html/body/div[11]/div/button[2]").click()  # Import
 
     def render(self, draw_io_string, graph_name: str = "Untitled Graph"):
         first_line = draw_io_string.splitlines()[0]
@@ -199,9 +202,7 @@ class DrawIOBrowser(DrawIO):
         """
         self.click_menu_item("File", "Save As...")
 
-        option_element = self.driver.find_element(
-            By.XPATH, "//option[@title='Download']"
-        )
+        option_element = self.driver.find_element(By.XPATH, "//option[@title='Download']")
         option_element.click()
         self.click_button("OK")
 

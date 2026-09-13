@@ -132,3 +132,7 @@ dmypy.json
 .github/templates/*
 /.idea/
 /private/
+
+# Generated local artifacts
+/output/
+.ruff_cache/

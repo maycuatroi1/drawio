@@ -1,3 +1,16 @@
+# Unreleased
+
+- Add a standard-library XML API for documents, pages, nested containers,
+  editable shapes, port anchors and connector waypoints.
+- Load existing uncompressed/compressed diagrams and append pages while retaining
+  existing XML and metadata.
+- Render legacy Graph output to `.drawio` / `.xml` without Selenium; retain CSV,
+  text, optional PDF export and explicit browser helpers.
+- Fix graph edge identity, child registration, repeated CSV output and CSV quoting.
+- Preserve labels and circular nodes in the basic Mermaid importer; reject
+  unsupported syntax instead of silently dropping edges.
+- Add an offline CLI, native examples, tests and a Python/OS CI matrix.
+
 Changelog
 =========
 

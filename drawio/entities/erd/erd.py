@@ -50,7 +50,7 @@ class ERD:
             df.index = df.index + 1  # shifting index
             df = df.sort_index()  # sorting by index
             # header color is green
-            table_short_name = f"{i+1}. {table.name[:20]}"
+            table_short_name = f"{i + 1}. {table.name[:20]}"
             df.to_excel(writer, sheet_name=table_short_name, index=False, header=False)
             worksheet = writer.sheets[table_short_name]
             worksheet.set_column("A:A", 30)
@@ -59,13 +59,9 @@ class ERD:
 
             # header color is green
             format1 = writer.book.add_format({"bg_color": "#C6EFCE"})
-            worksheet.conditional_format(
-                "A1:B1", {"type": "no_blanks", "format": format1}
-            )
+            worksheet.conditional_format("A1:B1", {"type": "no_blanks", "format": format1})
             # color is blue
             format2 = writer.book.add_format({"bg_color": "#BDD7EE"})
-            worksheet.conditional_format(
-                "A2:B2", {"type": "no_blanks", "format": format2}
-            )
+            worksheet.conditional_format("A2:B2", {"type": "no_blanks", "format": format2})
 
-        writer.save()
+        writer.close()

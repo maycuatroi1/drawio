@@ -1,11 +1,4 @@
-# This requirements are for development and testing only, not for production.
-pytest
-coverage
-flake8
-black
-isort
-pytest-cov
-codecov
-mypy
-gitchangelog
-mkdocs
+pytest>=7
+pytest-cov>=4
+ruff>=0.9
+build>=1

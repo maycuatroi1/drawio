@@ -1,121 +1,108 @@
+"""A small flowchart importer; unsupported syntax fails instead of losing edges."""
+
+import json
 import re
-import typing
 
 from drawio.entities.base_entity import BaseEntity
 from drawio.entities.graph.graph import Graph
 from drawio.entities.graph.node import Node
 
+_SHAPES = [
+    ("((", "))", "circle"),
+    ("[[", "]]", "rectangle"),
+    ("[", "]", "rectangle"),
+    ("(", ")", "ellipse"),
+    ("{", "}", "diamond"),
+]
+_ID = re.compile(r"[A-Za-z0-9_](?:[\w.]|-(?![-|>]))*")
+_ARROW = re.compile(r"\s*(?:--\s*\|([^|]*)\|\s*-->|-->(?:\s*\|([^|]*)\|)?)\s*")
+
+
+def _statements(text):
+    start, depth, quoted, escaped = 0, 0, False, False
+    for i, char in enumerate(text):
+        if quoted:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                quoted = False
+        elif char == '"':
+            quoted = True
+        elif char in "[({":
+            depth += 1
+        elif char in "])}":
+            depth -= 1
+        elif char in ";\n" and depth == 0:
+            yield text[start:i].strip()
+            start = i + 1
+    yield text[start:].strip()
+
 
 class MermaidController(BaseEntity):
-    valid_graph_types = ["flowchart"]
+    valid_graph_types = ["flowchart", "graph"]
 
-    def __init__(self):
-        super().__init__()
-        self.__data = ""
-        self.__graph_type = None
-
-    def load(self, data: str) -> "Graph":
-        """Load mermaid data from a string."""
-        self.__data = data.strip()
-        self.__get_graph_type()
-
-        graph = self.__build_flow_chart()
+    def load(self, data):
+        if not isinstance(data, str):
+            raise TypeError("Mermaid input must be a string")
+        data = "\n".join(line for line in data.splitlines() if not line.lstrip().startswith("%%"))
+        header = re.match(r"\s*(flowchart|graph)\s+(TD|TB|BT|LR|RL)\b\s*;?", data)
+        if header is None:
+            raise ValueError("Expected a flowchart or graph header with a direction")
+        graph = Graph(graph_type=header[1])
+        for statement in _statements(data[header.end() :]):
+            if not statement:
+                continue
+            parent, pos = self._node(statement, 0, graph)
+            while statement[pos:].strip():
+                arrow = _ARROW.match(statement, pos)
+                if arrow is None:
+                    raise ValueError(f"Unsupported Mermaid syntax: {statement[pos:]}")
+                child, pos = self._node(statement, arrow.end(), graph)
+                label = arrow[1] if arrow[1] is not None else arrow[2]
+                if label:
+                    parent >> label >> child
+                else:
+                    parent >> child
+                parent = child
+        if not graph.nodes:
+            raise ValueError("The flowchart contains no nodes")
         return graph
 
-    def __get_graph_type(self):
-        """Get the graph type from the mermaid data."""
-        first_line = self.__data.split("\n")[0]
-        self.__graph_type = first_line.split(" ")[0].lower()
-        if self.__graph_type not in self.valid_graph_types:
-            raise NotImplementedError(f"Graph type '{self.__graph_type}' is not supported.")
-        return self.__graph_type
-
-    def __build_flow_chart(self) -> "Graph":
-        """Build a graph from a mermaid flowchart.
-        Example:
-            flowchart TD
-                A[Christmas] -->|Get money| B(Go shopping)
-                B --> C{Let me think}
-                C --|One| --> D[Laptop]
-                C --|Two|--> E[iPhone]
-                C -->|Three| F[fa:fa-car Car]
-        """
-        graph = Graph(graph_type=self.__graph_type)
-        # get nodes using regex
-        regex = r"(\w+)\s*(\[.*?\]|\(.*?\)|\{.*?\})"
-        matches = re.findall(regex, self.__data)
-        for match in matches:
-            if match[0]:
-                node_id = match[0]
-                node_label = match[1]
-            else:
-                node_id = match[2]
-                node_label = match[4]
-            # extract node shape from label
-            node_shape, node_label = self.__extract_node_shape(node_label)
-            node = Node(id=node_id, name=node_label, shape=node_shape)
-            graph.add_node(node)
-
-        # simple data
-        normalized_data = self.__data
-
-        for node in graph.nodes:
-            # remove node_name and keep only node id in data
-            normalized_data = normalized_data.replace(node.name, "")
-            # remove all open and close brackets
-            # Brackes: (, ), [, ], {, }, ((, )), [[, ]], {{, }}, (((, ))), [[[, ]]], {{{, }}}, [(, )],
-            brackets_open = ["(", "[", "{"]
-            brackets_close = [")", "]", "}"]
-            target_open = "["
-            target_close = "]"
-            for is_open, brackets in [(True, brackets_open), (False, brackets_close)]:
-                brackets_combination = self.__combination(brackets, 3)
-                for bracket in brackets_combination:
-                    target = target_open if is_open else target_close
-                    normalized_data = normalized_data.replace(bracket, target)
-
-        # remove all arrows
-        normalized_data = normalized_data.replace(" ", "")
-
-        self.log(f"Normalized data:\n{normalized_data}")
-
-        # get edges and labels using regex
-        regex_1 = r"([A-Za-z0-9]+)\s*-->\s*(?:\|([^|]+)\|\s*)?([A-Za-z0-9]+)"
-        regex_2 = r"([A-Za-z0-9]+)\[\]\s*-->\s*(?:\|([^|]+)\|\s*)?([A-Za-z0-9]+)\[\]"
-
-        matches = re.findall(regex_1, normalized_data) + re.findall(regex_2, normalized_data)
-        matches = list(set(matches))
-        for match in matches:
-            parent_id = match[0]
-            child_id = match[2]
-            label = match[1] if match[1] else None
-            parent_node = graph.get_node(parent_id)
-            child_node = graph.get_node(child_id)
-            if label:
-                edge = parent_node >> label >> child_node
-                self.log(f"Adding edge: '{parent_node.name}' -> '{child_node.name}' with label '{label}'")
-            else:
-                edge = parent_node >> child_node
-                self.log(f"Adding edge: '{parent_node.name}' -> '{child_node.name}'")
-        return graph
-
-    def __extract_node_shape(self, node_label):
-        """Extract node shape from node label."""
-        node_shape = "rectangle"
-        if node_label.startswith("["):
-            node_shape = "rectangle"
-            node_label = node_label[1:-1]
-        elif node_label.startswith("("):
-            node_shape = "circle"
-            node_label = node_label[1:-1]
-        elif node_label.startswith("{"):
-            node_shape = "diamond"
-            node_label = node_label[1:-1]
-        return node_shape, node_label
-
-    def __combination(self, brackets: typing.List[str], count_max):
-        result = []
-        for i in range(1, count_max + 1):
-            for j in range(0, len(brackets)):
-                result.append(brackets[j] * i)
-        return result
+    @staticmethod
+    def _node(text, pos, graph):
+        while pos < len(text) and text[pos].isspace():
+            pos += 1
+        match = _ID.match(text, pos)
+        if match is None:
+            raise ValueError(f"Expected a node at: {text[pos:]}")
+        id, pos = match[0], match.end()
+        while pos < len(text) and text[pos].isspace():
+            pos += 1
+        label, shape, explicit = id, "rectangle", False
+        for opening, closing, candidate_shape in _SHAPES:
+            if text.startswith(opening, pos):
+                explicit, shape = True, candidate_shape
+                start = pos + len(opening)
+                if text.startswith('"', start):
+                    try:
+                        label, consumed = json.JSONDecoder().raw_decode(text[start:])
+                    except ValueError as exc:
+                        raise ValueError("Invalid quoted Mermaid label") from exc
+                    end = start + consumed
+                    if not text.startswith(closing, end):
+                        raise ValueError("Missing closing shape delimiter")
+                else:
+                    end = text.find(closing, start)
+                    if end < 0:
+                        raise ValueError("Missing closing shape delimiter")
+                    label = text[start:end]
+                pos = end + len(closing)
+                break
+        node = graph.get_node(id)
+        if node is None:
+            node = graph.add_node(Node(label, id=id, shape=shape))
+        elif explicit:
+            node.name, node.shape = label, shape
+        return node, pos

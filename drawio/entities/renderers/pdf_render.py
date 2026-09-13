@@ -3,11 +3,6 @@ import re
 from drawio.entities.graph.graph import Graph
 from drawio.entities.renderers.base_render import BaseRender
 
-try:
-    import graphviz
-except ImportError:
-    pass
-
 
 class PDFRender(BaseRender):
     file_type = "pdf"
@@ -18,9 +13,17 @@ class PDFRender(BaseRender):
     def _render(self, graph: "Graph", output_file: str, show: bool = False):
         """Render to pdf using pygraphviz"""
 
-        visual_graph = graphviz.Digraph(
-            name=graph.name, engine="dot", filename=output_file
-        )
+        try:
+            import graphviz
+        except ImportError as exc:
+            raise RuntimeError(
+                "PDF export requires 'pip install drawio-python[pdf]' and the Graphviz dot executable"
+            ) from exc
+
+        from pathlib import Path
+
+        graph._complete_edges()
+        visual_graph = graphviz.Digraph(name=graph.name, engine="dot", filename=output_file)
 
         for node in graph.nodes:
             node_name = self.__format_node_name(node.name)
@@ -41,7 +44,7 @@ class PDFRender(BaseRender):
                 color="red",
             )
 
-        output_file_name = output_file.split(".")[0]
+        output_file_name = str(Path(output_file).with_suffix(""))
         visual_graph.format = "pdf"
         visual_graph.render(output_file_name, view=self.show)
 
