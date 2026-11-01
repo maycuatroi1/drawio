@@ -64,8 +64,9 @@ heading yourself. Nested container coordinates follow the same rule. The writer
 does not pack, resize or align child blocks for you.
 
 `validate(check_bounds=True)` also checks ordinary child rectangles against
-parent bounds. Relative ports are exempt from this bounds check. Validation does
-not measure text, detect shape overlaps or guarantee optimal connector routing.
+parent bounds. Relative ports are exempt from this bounds check. Validation checks
+structure only; `drawio.lint.check(document)` (or `drawio lint`) measures text and
+finds overlaps and connectors that cross shapes or labels.
 
 `Cell.element`, `Page.model`, `Page.element` and `Document.element` expose the
 underlying ElementTree elements for advanced XML editing. Call `validate()`
@@ -105,5 +106,6 @@ pass `html=True` to a shape method when you intend to render trusted markup.
 page.box("<b>Title</b><br/>Subtitle", 40, 300, html=True)
 ```
 
-XML generation works offline. To inspect the visual result, open the file in
-draw.io. Use that editor or draw.io Desktop for image/PDF exports.
+XML generation works offline. `drawio.render.render(document, "out.png")` exports a
+page; see the README for backends. The full agent-oriented reference, including
+layout, lint, rendering and the CLI, is `drawio/skill/references/api.md`.

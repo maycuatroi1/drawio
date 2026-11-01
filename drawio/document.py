@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import base64
 import math
+import mimetypes
 import os
 import re
-import tempfile
+import secrets
+import stat
 import xml.etree.ElementTree as ET
 import zlib
 from copy import deepcopy
@@ -15,8 +17,13 @@ from pathlib import Path
 from typing import Mapping, Optional, Union
 from urllib.parse import quote, unquote
 
+from . import text as _metrics
+from .shapes import style_for
+
 MAX_XML_BYTES = 10 * 1024 * 1024
 _INVALID_XML = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\ud800-\udfff\ufffe\uffff]")
+_GENERATED_ID = re.compile(r"^[ne][0-9]+$")
+_THEME_ARROW = object()
 
 
 def _text(value: str) -> str:
@@ -77,6 +84,58 @@ def _inflate(text: str, limit: int) -> str:
         raise ValueError("Invalid compressed draw.io diagram") from exc
 
 
+def parse_style(style: Optional[str]) -> dict:
+    """Split a draw.io style string into a dict; bare names such as `ellipse` map to None."""
+    result: dict = {}
+    for part in (style or "").split(";"):
+        part = part.strip()
+        if not part:
+            continue
+        key, sep, value = part.partition("=")
+        result[key] = value if sep else None
+    return result
+
+
+def _padding(style: Mapping) -> tuple[float, float]:
+    """Horizontal and vertical room draw.io keeps between a shape's edge and its label."""
+    spacing = float(style.get("spacing", "2") or 0)
+
+    def get(key: str) -> float:
+        return float(style.get(key, "0") or 0)
+
+    pad_x = 2 * spacing + get("spacingLeft") + get("spacingRight")
+    pad_y = 2 * spacing + get("spacingTop") + get("spacingBottom")
+    return pad_x, pad_y
+
+
+def _title_offset(style: Mapping, size: float) -> float:
+    """Room taken by a container's title, which sits at the top of the box."""
+    if style.get("container") == "1" and style.get("verticalAlign") == "top":
+        return size * _metrics.LINE_HEIGHT
+    return 0.0
+
+
+def _image_uri(source: Union[str, Path]) -> str:
+    """A draw.io image reference: URL, or a data URI in draw.io's `data:mime,base64` form."""
+    if isinstance(source, str) and source.startswith(("http://", "https://")):
+        return _text(source)
+    if isinstance(source, str) and source.startswith("data:"):
+        head, sep, data = source.partition(",")
+        if not sep:
+            raise ValueError("A data URI needs a comma before its data")
+        mime = head[5:].split(";")[0]
+        if ";base64" not in head:
+            data = base64.b64encode(unquote(data).encode("utf-8")).decode("ascii")
+        return f"data:{mime},{data}"
+    path = Path(source).expanduser()
+    mime = mimetypes.guess_type(path.name)[0]
+    if path.suffix.lower() == ".svg":
+        mime = "image/svg+xml"
+    if not mime or not mime.startswith("image/"):
+        raise ValueError(f"Not an image file: {path}")
+    return f"data:{mime},{base64.b64encode(path.read_bytes()).decode('ascii')}"
+
+
 @dataclass(frozen=True)
 class Theme:
     """Default styles for newly created shapes and connectors."""
@@ -87,6 +146,26 @@ class Theme:
     stroke_color: str = "#8091a5"
     text_color: str = "#182b40"
     line_color: str = "#6b7d91"
+    stroke_width: float = 1.5
+    edge_width: float = 2
+    end_arrow: str = "block"
+    spacing: float = 10
+
+    @classmethod
+    def drawio(cls, **overrides) -> Theme:
+        """The look of a fresh shape in the draw.io editor: Helvetica 12, black lines."""
+        values = dict(
+            font_size=12,
+            fill_color="#ffffff",
+            stroke_color="#000000",
+            text_color="#000000",
+            line_color="#000000",
+            stroke_width=1,
+            edge_width=1,
+            end_arrow="classic",
+            spacing=2,
+        )
+        return cls(**{**values, **overrides})
 
 
 @dataclass(eq=False, frozen=True)
@@ -96,6 +175,99 @@ class Cell:
     id: str
     page: Page
     element: ET.Element
+
+    @property
+    def label(self) -> str:
+        return self.element.get("value", "")
+
+    @property
+    def text(self) -> str:
+        """The visible label, with HTML markup removed when the cell uses html=1."""
+        return _metrics.plain(self.label, html_label=self.style.get("html") == "1")
+
+    @property
+    def style(self) -> dict:
+        return parse_style(self.element.get("style"))
+
+    @property
+    def is_vertex(self) -> bool:
+        return self.element.get("vertex") == "1"
+
+    @property
+    def is_edge(self) -> bool:
+        return self.element.get("edge") == "1"
+
+    @property
+    def parent_id(self) -> Optional[str]:
+        return self.element.get("parent")
+
+    @property
+    def source_id(self) -> Optional[str]:
+        return self.element.get("source")
+
+    @property
+    def target_id(self) -> Optional[str]:
+        return self.element.get("target")
+
+    def _geometry(self, attr: str) -> float:
+        geometry = self.element.find("mxGeometry")
+        return 0.0 if geometry is None else float(geometry.get(attr, "0"))
+
+    @property
+    def x(self) -> float:
+        """Left edge, relative to the parent container."""
+        return self._geometry("x")
+
+    @property
+    def y(self) -> float:
+        """Top edge, relative to the parent container."""
+        return self._geometry("y")
+
+    @property
+    def width(self) -> float:
+        return self._geometry("width")
+
+    @property
+    def height(self) -> float:
+        return self._geometry("height")
+
+    @property
+    def bounds(self) -> tuple[float, float, float, float]:
+        """(x, y, width, height) in page coordinates."""
+        return self.page.bounds(self)
+
+    def set_label(self, label: str) -> Cell:
+        self.element.set("value", _text(label))
+        return self
+
+    def set_style(self, style: Optional[Mapping] = None, **properties) -> Cell:
+        """Merge style properties into the cell; a value of None removes the property."""
+        merged = self.style
+        for key, value in {**(style or {}), **properties}.items():
+            if value is None:
+                merged.pop(key, None)
+            else:
+                merged[key] = value
+        current = {k: v for k, v in merged.items() if v is not None}
+        bare = {k: None for k, v in merged.items() if v is None}
+        self.element.set("style", "".join(f"{k};" for k in bare) + _style({}, current))
+        return self
+
+    def move(self, x: float, y: float, *, absolute: bool = False) -> Cell:
+        """Move a shape; with absolute=True, x and y are page coordinates."""
+        if absolute:
+            ox, oy = self.page._parent_origin(self.element.get("parent"))
+            x, y = x - ox, y - oy
+        geometry = self.page._vertex_geometry(self)
+        geometry.set("x", _number(x))
+        geometry.set("y", _number(y))
+        return self
+
+    def resize(self, width: float, height: float) -> Cell:
+        geometry = self.page._vertex_geometry(self)
+        geometry.set("width", _number(width, positive=True))
+        geometry.set("height", _number(height, positive=True))
+        return self
 
 
 class Page:
@@ -162,7 +334,14 @@ class Page:
         if id is not None:
             id = _identifier(id)
             if id in existing:
-                raise ValueError(f"Duplicate cell ID: {id}")
+                hint = ""
+                if _GENERATED_ID.match(id):
+                    hint = (
+                        f" ({id} has the form of the IDs generated for cells created without"
+                        " an id: n1, n2... for shapes, e1, e2... for connectors. Pass an id"
+                        " to every cell, or use another naming scheme.)"
+                    )
+                raise ValueError(f"Duplicate cell ID: {id}{hint}")
             return id
         i = 1
         while f"{prefix}{i}" in existing:
@@ -181,10 +360,22 @@ class Page:
         parent: Optional[Union[Cell, str]] = None,
         style: Optional[Mapping] = None,
         html: bool = False,
+        shape: Optional[str] = None,
+        absolute: bool = False,
+        autosize: bool = False,
     ) -> Cell:
-        """Add a shape. Labels are plain text unless html=True is explicit."""
+        """Add a shape. Labels are plain text unless html=True is explicit.
+
+        `shape` names a built-in draw.io shape (see drawio.shapes.SHAPES, e.g. "ellipse",
+        "cylinder", "rhombus") or any raw draw.io shape name. With absolute=True, x and y
+        are page coordinates even inside a container. With autosize=True the box grows to
+        fit its label.
+        """
         id = self._new_id(id, "n")
         parent_id = "1" if parent is None else self._resolve(parent)
+        if absolute:
+            ox, oy = self._parent_origin(parent_id)
+            x, y = x - ox, y - oy
         geometry = dict(
             x=_number(x),
             y=_number(y),
@@ -199,8 +390,9 @@ class Page:
             "fontColor": self.theme.text_color,
             "fillColor": self.theme.fill_color,
             "strokeColor": self.theme.stroke_color,
-            "strokeWidth": 1.5,
-            "spacing": 10,
+            "strokeWidth": self.theme.stroke_width,
+            "spacing": self.theme.spacing,
+            **style_for(shape),
         }
         # Do not let a style mapping silently turn plain text into trusted HTML.
         styles = _style(defaults, {**(style or {}), "html": html})
@@ -214,7 +406,46 @@ class Page:
             parent=parent_id,
         )
         ET.SubElement(element, "mxGeometry", **geometry, **{"as": "geometry"})
-        return Cell(id, self, element)
+        cell = Cell(id, self, element)
+        if autosize:
+            self.autosize(cell)
+        return cell
+
+    def ellipse(
+        self, label: str, x: float, y: float, width: float = 120, height: float = 80, **kwargs
+    ) -> Cell:
+        """Add an ellipse; keyword arguments are those of box()."""
+        return self.box(label, x, y, width, height, shape="ellipse", **kwargs)
+
+    def image(
+        self,
+        source: Union[str, Path],
+        x: float,
+        y: float,
+        width: float = 64,
+        height: float = 64,
+        *,
+        label: str = "",
+        style: Optional[Mapping] = None,
+        **kwargs,
+    ) -> Cell:
+        """Add a picture from a local file (embedded in the diagram), a URL or a data URI.
+
+        The label, if any, sits under the picture.
+        """
+        uri = _image_uri(source)
+        styles = {
+            "shape": "image",
+            "image": uri,
+            "imageAspect": 1,
+            "aspect": "fixed",
+            "verticalLabelPosition": "bottom",
+            "verticalAlign": "top",
+            "fillColor": "none",
+            "strokeColor": "none",
+            **(style or {}),
+        }
+        return self.box(label, x, y, width, height, style=styles, **kwargs)
 
     def container(
         self,
@@ -278,17 +509,26 @@ class Page:
         waypoints=(),
         dashed: bool = False,
         style: Optional[Mapping] = None,
+        arrow=_THEME_ARROW,
+        start_arrow: Optional[str] = None,
     ) -> Cell:
-        """Add an orthogonal connector; waypoints use page coordinates."""
+        """Add an orthogonal connector; waypoints use page coordinates.
+
+        `arrow` and `start_arrow` name the end markers (see drawio.shapes.ARROWS); None
+        draws a plain line end, so arrow=None gives an undirected connector.
+        """
         source_id, target_id = self._resolve(source), self._resolve(target)
         id = self._new_id(id, "e")
+        end = self.theme.end_arrow if arrow is _THEME_ARROW else (arrow or "none")
         defaults = {
             "edgeStyle": "orthogonalEdgeStyle",
             "rounded": 0,
             "html": 0,
-            "endArrow": "block",
+            "endArrow": end,
             "endFill": 1,
-            "strokeWidth": 2,
+            "startArrow": start_arrow or "none",
+            "startFill": 1,
+            "strokeWidth": self.theme.edge_width,
             "fontFamily": self.theme.font_family,
             "fontSize": self.theme.font_size,
             "fontColor": self.theme.text_color,
@@ -328,6 +568,153 @@ class Page:
             for x, y in points:
                 ET.SubElement(array, "mxPoint", x=x, y=y)
         return Cell(id, self, element)
+
+    def _entries(self) -> dict[str, ET.Element]:
+        """Map each cell ID to its element directly under <root> (mxCell or object)."""
+        result = {}
+        for entry in self.root:
+            inner = entry.find("mxCell")
+            id = entry.get("id") or (inner.get("id") if inner is not None else None)
+            if id is not None:
+                result[id] = entry
+        return result
+
+    def _vertex_geometry(self, cell: Cell) -> ET.Element:
+        if not cell.is_vertex:
+            raise ValueError(f"Expected a shape, not a layer or connector: {cell.id}")
+        geometry = cell.element.find("mxGeometry")
+        if geometry is None:
+            geometry = ET.SubElement(cell.element, "mxGeometry", **{"as": "geometry"})
+        return geometry
+
+    def _parent_origin(self, parent_id: Optional[str]) -> tuple[float, float]:
+        """Page coordinates of the origin that children of `parent_id` are placed from."""
+        index = self._index()
+        x = y = 0.0
+        seen = set()
+        while parent_id in index and parent_id not in seen:
+            seen.add(parent_id)
+            cell = index[parent_id]
+            if cell.get("vertex") != "1":
+                break
+            geometry = cell.find("mxGeometry")
+            if geometry is not None and geometry.get("relative") != "1":
+                x += float(geometry.get("x", "0"))
+                y += float(geometry.get("y", "0"))
+            parent_id = cell.get("parent")
+        return x, y
+
+    def bounds(self, ref: Union[Cell, str]) -> tuple[float, float, float, float]:
+        """(x, y, width, height) of a shape in page coordinates."""
+        cell = self.get(self._resolve(ref))
+        ox, oy = self._parent_origin(cell.parent_id)
+        return ox + cell.x, oy + cell.y, cell.width, cell.height
+
+    @property
+    def shapes(self) -> tuple[Cell, ...]:
+        return tuple(c for c in self.cells if c.is_vertex)
+
+    @property
+    def edges(self) -> tuple[Cell, ...]:
+        return tuple(c for c in self.cells if c.is_edge)
+
+    def children(self, ref: Union[Cell, str, None] = None) -> tuple[Cell, ...]:
+        """Shapes whose parent is `ref`, or top-level shapes when ref is None."""
+        parent_id = "1" if ref is None else self._resolve(ref)
+        return tuple(c for c in self.shapes if c.parent_id == parent_id)
+
+    def find(self, label: str) -> tuple[Cell, ...]:
+        """Cells whose visible label equals `label`."""
+        return tuple(c for c in self.cells if c.text == label)
+
+    def remove(self, ref: Union[Cell, str]) -> None:
+        """Delete a cell with its children and every connector attached to them."""
+        id = ref.id if isinstance(ref, Cell) else _identifier(ref)
+        if id in ("0", "1"):
+            raise ValueError("The root cell and default layer cannot be removed")
+        index = self._index()
+        if id not in index:
+            raise ValueError(f"Unknown cell ID: {id}")
+        doomed = {id}
+        changed = True
+        while changed:
+            changed = False
+            for other, cell in index.items():
+                if other in doomed:
+                    continue
+                refs = (cell.get("parent"), cell.get("source"), cell.get("target"))
+                if any(r in doomed for r in refs):
+                    doomed.add(other)
+                    changed = True
+        for other, entry in self._entries().items():
+            if other in doomed:
+                self.root.remove(entry)
+
+    def autosize(self, ref: Union[Cell, str], *, max_width: Optional[float] = None) -> Cell:
+        """Grow a shape so its label fits: taller first, wider up to max_width if a word
+        cannot wrap. Sizes come from drawio.text, an estimate of draw.io's text layout."""
+        cell = self.get(self._resolve(ref))
+        style = cell.style
+        text = cell.text
+        if not text.strip():
+            return cell
+        size = float(style.get("fontSize", self.theme.font_size))
+        bold = int(float(style.get("fontStyle", "0"))) & 1 == 1
+        family = style.get("fontFamily", self.theme.font_family)
+        pad_x, pad_y = _padding(style)
+        width = cell.width
+        word = _metrics.longest_word(text, size, bold=bold, family=family)
+        if word + pad_x > width:
+            limit = max(width, max_width) if max_width else width
+            width = min(limit, math.ceil(word + pad_x + 1))
+        wrap = style.get("whiteSpace") == "wrap"
+        text_w, text_h, _ = _metrics.measure(
+            text, size, width=width - pad_x if wrap else None, bold=bold, family=family
+        )
+        if not wrap and text_w + pad_x > width:
+            width = math.ceil(text_w + pad_x + 1)
+        if style.get("verticalLabelPosition") in ("bottom", "top"):
+            height = cell.height  # the label sits outside the shape
+        else:
+            height = max(cell.height, math.ceil(text_h + pad_y + _title_offset(style, size)))
+        return cell.resize(width, height)
+
+    def fit(self, ref: Union[Cell, str, None] = None, *, padding: float = 20) -> None:
+        """Grow containers to enclose their children, plus `padding` on the right and below.
+
+        With no argument, fits every container (innermost first) and enlarges the page so
+        that all shapes lie on it.
+        """
+        if ref is not None:
+            self._fit_one(self.get(self._resolve(ref)), padding)
+            return
+        index = self._index()
+
+        def depth(cell: Cell) -> int:
+            n, parent = 0, cell.parent_id
+            while parent in index and parent not in ("0", "1"):
+                n, parent = n + 1, index[parent].get("parent")
+            return n
+
+        parents = {c.parent_id for c in self.shapes}
+        for cell in sorted((c for c in self.shapes if c.id in parents), key=depth, reverse=True):
+            self._fit_one(cell, padding)
+        right = bottom = 0.0
+        for cell in self.shapes:
+            x, y, w, h = self.bounds(cell)
+            right, bottom = max(right, x + w), max(bottom, y + h)
+        width = max(float(self.model.get("pageWidth", "0")), math.ceil(right + padding))
+        height = max(float(self.model.get("pageHeight", "0")), math.ceil(bottom + padding))
+        for attr, value in (("pageWidth", width), ("pageHeight", height)):
+            self.model.set(attr, _number(value))
+
+    def _fit_one(self, cell: Cell, padding: float) -> None:
+        children = self.children(cell)
+        if not children:
+            return
+        right = max(c.x + c.width for c in children) + padding
+        bottom = max(c.y + c.height for c in children) + padding
+        cell.resize(max(cell.width, right), max(cell.height, bottom))
 
     def validate(self, *, check_bounds: bool = False) -> None:
         """Check IDs, references and parent cycles; optionally check child bounds."""
@@ -454,6 +841,42 @@ class Document:
         self._pages.append(page)
         return page
 
+    def remove_page(self, ref: Union[Page, str]) -> None:
+        """Delete a page, given the Page or its ID."""
+        page = ref if isinstance(ref, Page) else self.get_page(ref)
+        if page not in self._pages:
+            raise ValueError("The page belongs to another document")
+        self.element.remove(page.element)
+        self._pages.remove(page)
+
+    def import_page(
+        self, page: Page, *, id: Optional[str] = None, name: Optional[str] = None
+    ) -> Page:
+        """Copy a page, usually from another Document, to the end of this one.
+
+        The copy keeps its cell IDs. It keeps its page ID unless that ID is taken here or
+        `id` is given.
+        """
+        ids = {p.id for p in self.pages}
+        element = deepcopy(page.element)
+        if id is not None:
+            _identifier(id)
+            if id in ids:
+                raise ValueError(f"Duplicate page ID: {id}")
+        elif page.id in ids:
+            i = 1
+            while f"page-{i}" in ids:
+                i += 1
+            id = f"page-{i}"
+        if id is not None:
+            element.set("id", id)
+        if name is not None:
+            element.set("name", _identifier(name))
+        self.element.append(element)
+        copy = Page(element, self.theme)
+        self._pages.append(copy)
+        return copy
+
     def get_page(self, id: str) -> Page:
         for page in self.pages:
             if page.id == id:
@@ -476,23 +899,29 @@ class Document:
         return '<?xml version="1.0" encoding="UTF-8"?>\n' + ET.tostring(element, encoding="unicode")
 
     def save(self, path, *, overwrite: bool = False) -> Path:
-        """Atomically save; refuse to replace a file unless overwrite=True."""
+        """Atomically save; refuse to replace a file unless overwrite=True.
+
+        A new file gets the usual permissions for the process umask; a replaced file keeps
+        its own.
+        """
         path = Path(path).expanduser()
         xml = self.to_xml()
-        temporary = None
+        temporary = path.parent / f".{path.name}.{secrets.token_hex(6)}.tmp"
         try:
-            with tempfile.NamedTemporaryFile(
-                mode="w", encoding="utf-8", dir=path.parent, delete=False
-            ) as stream:
-                temporary = Path(stream.name)
+            # os.open applies the umask, unlike tempfile, which always creates mode 0600.
+            fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o666)
+            with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as stream:
                 stream.write(xml)
             if overwrite:
+                try:
+                    os.chmod(temporary, stat.S_IMODE(path.stat().st_mode))
+                except FileNotFoundError:
+                    pass
                 os.replace(temporary, path)
             else:
                 os.link(temporary, path)  # Exclusive creation; no exists/check race.
         finally:
-            if temporary is not None:
-                temporary.unlink(missing_ok=True)
+            temporary.unlink(missing_ok=True)
         return path
 
     def to_url(self) -> str:

@@ -17,6 +17,13 @@ jobs:
       matrix:
         python-version: ['3.9', '3.12', '3.14']
         os: [ubuntu-latest, windows-latest, macos-latest]
+        # setup-python has no 3.9 build for the newest Ubuntu image.
+        exclude:
+          - python-version: '3.9'
+            os: ubuntu-latest
+        include:
+          - python-version: '3.9'
+            os: ubuntu-22.04
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7

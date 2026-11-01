@@ -1,5 +1,20 @@
 # Unreleased
 
+- Render pages to PNG, SVG, PDF and JPEG on any OS: a built-in native renderer (SVG
+  with no dependencies, raster through Pillow), the draw.io desktop exporter, or the
+  official diagrams.net viewer in a headless browser.
+- Add layout checks (`drawio lint`): overflowing text, overlaps, connectors through
+  shapes or labels, children outside containers, small text and aspect ratio for a
+  target size.
+- Add automatic layout (`drawio.layout`: layered, row, column, grid), `page.fit()`,
+  `page.autosize()`, text metrics, named shapes, images, colour presets,
+  `Theme.drawio()`, arrow ends, absolute coordinates, cell geometry accessors,
+  `page.remove()`, `page.find()`, `Document.import_page()` and `remove_page()`.
+- New CLI commands for agents, all with `--json`: render, lint, inspect, fit, layout,
+  merge, shapes, doctor and skill; ship an agent skill installable with
+  `drawio skill install`.
+- Fix `save()` creating files with mode 0600; explain duplicate-ID clashes with
+  generated IDs.
 - Add a standard-library XML API for documents, pages, nested containers,
   editable shapes, port anchors and connector waypoints.
 - Load existing uncompressed/compressed diagrams and append pages while retaining

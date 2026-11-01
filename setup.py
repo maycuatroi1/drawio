@@ -34,7 +34,9 @@ def read_requirements(path):
 setup(
     name="drawio-python",
     version=read("drawio", "VERSION"),
-    description="Create editable, multi-page draw.io diagrams with native Python XML",
+    description=(
+        "Build, check and export editable draw.io diagrams in Python; made for people and agents"
+    ),
     url="https://github.com/maycuatroi1/drawio/",
     long_description=read("README.md"),
     long_description_content_type="text/markdown",
@@ -46,6 +48,8 @@ setup(
     entry_points={"console_scripts": ["drawio = drawio.__main__:main"]},
     extras_require={
         "test": read_requirements("requirements-test.txt"),
+        "render": ["Pillow>=9.1"],
+        "browser-render": ["playwright>=1.40"],
         "browser": ["selenium>=4", "webdriver-manager>=4"],
         "pdf": ["graphviz>=0.20"],
         "excel": ["pandas>=1.5", "xlsxwriter>=3"],
