@@ -13,6 +13,7 @@ from drawio import Document
         ("mermaid-to-drawio.py", "sample.drawio", 1),
         ("complex-example.py", "extended.drawio", 2),
         ("native_document.py", "output/publishing.drawio", 2),
+        ("agent_workflow.py", "output/order-flow.drawio", 1),
     ],
 )
 def test_examples_produce_real_xml(example, output, pages, monkeypatch):

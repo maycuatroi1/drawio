@@ -1,20 +1,33 @@
 # drawio-python
 
-Build editable draw.io diagrams in Python. Save XML files without Selenium,
-Chrome, an export server, or runtime dependencies. Requires Python 3.9 or newer.
+Build, check and export editable draw.io diagrams in Python. The library writes
+native draw.io XML (every shape stays editable in draw.io), measures labels, finds
+layout problems, lays shapes out, and renders PNG, SVG or PDF on Linux, macOS and
+Windows. The core needs only the Python standard library; Python 3.9 or newer.
 
-The native API supports multiple pages, nested containers, styled shapes,
-connector ports and waypoints. The existing `Graph` / `Node` API still works.
+It is built to be driven by coding agents as much as by people: every command has
+`--json` output, and an agent skill ships with the package.
 
-## Install this checkout
+## Install
 
 ```sh
-python3 -m venv .venv
-source .venv/bin/activate
-python -m pip install -e '.[test]'
+pip install 'drawio-python[render]'      # core + PNG/JPEG/PDF output (Pillow)
+pip install drawio-python                # core only: build, lint, SVG
+pip install 'drawio-python[browser-render]'  # exact rendering of any draw.io file
 ```
 
-These instructions use the updated source. The version on PyPI may differ.
+From a checkout: `python -m pip install -e '.[render,test]'`. Check what the machine
+can render with `drawio doctor`.
+
+## Agents
+
+```sh
+drawio skill install          # into ~/.claude/skills, ~/.codex/skills and/or ~/.agents/skills
+drawio skill show             # print the skill
+```
+
+The skill (`drawio/skill/SKILL.md`) teaches the loop **build, `drawio lint`,
+`drawio render`, look, fix**, the API, slide sizing and the common errors.
 
 ## Create a diagram
 
@@ -78,16 +91,82 @@ Labels default to plain text. Use `html=True` only for markup you trust. Style
 mappings use draw.io property names such as `fillColor`, `shape` and `fontSize`.
 XML escaping is handled by the writer.
 
+## Shapes, layout and fitting text
+
+```python
+from drawio import Document, Theme
+from drawio.layout import layered
+from drawio.shapes import color
+
+doc = Document(theme=Theme.drawio())   # the draw.io editor's own look
+page = doc.add_page("Flow")
+start = page.box("Start", 0, 0, 120, 50, shape="rounded", style=color("green"))
+check = page.box("Valid?", 0, 0, 120, 80, shape="rhombus")
+store = page.box("Orders", 0, 0, 120, 80, shape="cylinder", style=color("yellow"))
+page.connect(start, check)
+page.connect(check, store, "yes")
+layered(page, direction="down")        # ranks along the connectors; also row/column/grid
+page.fit()                             # grow containers and the page around the shapes
+doc.save("flow.drawio", overwrite=True)
+```
+
+- `shape=` accepts `rounded, ellipse, circle, rhombus, cylinder, hexagon, triangle,
+  parallelogram, document, cloud, process, note, card, step, actor` or any draw.io
+  shape name; `page.image()` embeds a picture file.
+- `connect(..., arrow=None)` draws an undirected line; `arrow` and `start_arrow` take
+  any draw.io marker (`drawio shapes` lists them).
+- `box(..., absolute=True)` takes page coordinates inside a container;
+  `box(..., autosize=True)` or `page.autosize(cell)` grows a box to fit its label.
+- Cells expose `x`, `y`, `width`, `height`, `bounds`, `style`, `text`, `move()`,
+  `resize()`, `set_style()`; pages offer `find()`, `children()`, `remove()`;
+  documents offer `import_page()` and `remove_page()`.
+
+## Check the layout
+
+```sh
+drawio lint flow.drawio                     # exit status 1 when something is wrong
+drawio lint deck.drawio --fit 8.15x4.85in   # also: text below 12 pt once placed on a slide
+drawio inspect flow.drawio --json           # every shape box and connector route
+```
+
+Lint reports overflowing labels, overlapping shapes and labels, connectors that run
+through shapes or labels, children outside containers, and (with `--fit`) text that
+ends up too small and aspect-ratio mismatches. Text widths are estimated from
+Helvetica/Arial metrics, close to draw.io's wrapping.
+
+## Render
+
+```sh
+drawio render flow.drawio -o flow.png --scale 2
+drawio render flow.drawio -o flow.svg              # plain SVG text, no foreignObject
+drawio render deck.drawio -o slide.png --aspect 16:9
+drawio render big.drawio --all-pages -f pdf
+```
+
+| Backend | Requirements | Output |
+|---|---|---|
+| `native` | none for SVG; Pillow for PNG, JPEG, PDF | shapes this library makes and common draw.io shapes |
+| `desktop` | [draw.io desktop](https://github.com/jgraph/drawio-desktop/releases) | exact |
+| `browser` | `[browser-render]` extra plus Chrome, Edge or `playwright install chromium` | exact, including stencils and icons |
+| `auto` | | desktop when installed, otherwise native |
+
+The browser backend loads the official diagrams.net viewer, downloaded once to the
+user cache (set `DRAWIO_VIEWER_JS` to work offline). On Linux the desktop backend
+needs a display or `xvfb-run`. Native PDF is vector when `cairosvg` or `rsvg-convert`
+is available, otherwise a raster image. `drawio doctor` reports all of this.
+
 ## CLI
 
 ```sh
-python -m drawio new empty.drawio --name Overview
-python -m drawio validate publishing.drawio --check-bounds
-python -m drawio info publishing.drawio
-python -m drawio url publishing.drawio
+drawio new empty.drawio --name Overview
+drawio validate publishing.drawio --check-bounds
+drawio info publishing.drawio
+drawio url publishing.drawio
+drawio render | lint | inspect | fit | layout | merge | shapes | doctor | skill
 ```
 
-The installed `drawio` command exposes the same interface. `url` prints an editor
+`python -m drawio` runs the same commands, which helps when the draw.io desktop
+app also installed a `drawio` command. Commands that report take `--json`. `url` prints an editor
 link containing the complete diagram. Generating the URL makes no network
 request; anyone with the link can read its embedded content.
 
@@ -115,8 +194,8 @@ then asks the default browser to open an encoded editor URL; it no longer waits
 for console input. Tests and examples use `show=False`.
 
 Unpositioned legacy nodes use a simple grid, including disconnected graphs and
-cycles. Use `Node(x=..., y=...)` or the native `Page` API for an authored layout.
-The library does not provide automatic graph layout or SVG/PNG rendering.
+cycles. Use `Node(x=..., y=...)` or the native `Page` API with `drawio.layout` for
+an authored or automatic layout.
 
 `to_draw_io_csv()` and `to_draw_io()` still return the legacy CSV and text forms.
 The basic Mermaid importer retains the historical import path:
@@ -146,6 +225,8 @@ containers. The second demonstrates loading a file and adding a page.
 
 Optional extras:
 
+- `.[render]`: Pillow, for PNG, JPEG and PDF output of the native renderer.
+- `.[browser-render]`: Playwright, for the exact `browser` render backend.
 - `.[pdf]`: Python Graphviz binding; also install the Graphviz `dot` executable.
 - `.[browser]`: legacy Selenium helpers for callers importing `DrawIOBrowser`
   directly. They are not part of native rendering and are not live-browser
@@ -161,6 +242,7 @@ make test
 make build
 ```
 
-Tests write real XML and run examples in temporary directories. They do not
-install packages, download browser drivers, or launch Chrome. See
+Tests write real XML, render with the native backend and run examples in
+temporary directories. They do not install packages, download browser drivers, or
+launch Chrome. See
 [the API reference](docs/index.md) and [contribution guide](CONTRIBUTING.md).
