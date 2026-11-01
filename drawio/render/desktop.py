@@ -12,6 +12,7 @@ import os
 import shutil
 import subprocess
 import sys
+import sysconfig
 from pathlib import Path
 from typing import Optional
 
@@ -34,13 +35,27 @@ _CANDIDATES = {
 
 
 def _is_ours(path: str) -> bool:
-    """The `drawio` command of this Python package also sits on PATH; skip it."""
+    """Whether `path` is the `drawio` command of a Python package rather than draw.io desktop.
+
+    pip installs that command as a script with a Python shebang on Linux and macOS, and as
+    an .exe launcher with the script appended (uncompressed) on Windows. Anything inside a
+    Python scripts directory counts as ours too.
+    """
+    resolved = Path(path).resolve()
+    scripts = {sysconfig.get_path("scripts"), str(Path(sys.executable).parent)}
+    if any(d and Path(d).resolve() == resolved.parent for d in scripts):
+        return True
     try:
-        with open(path, "rb") as stream:
+        with open(resolved, "rb") as stream:
             head = stream.read(256)
+            stream.seek(0, os.SEEK_END)
+            stream.seek(max(0, stream.tell() - 65536))
+            tail = stream.read()
     except OSError:
         return False
-    return head.startswith(b"#!") and b"python" in head.lower()
+    if head.startswith(b"#!") and b"python" in head.lower():
+        return True
+    return b"drawio.__main__" in tail or b"from drawio" in tail
 
 
 def find() -> Optional[str]:

@@ -1,4 +1,5 @@
 import xml.etree.ElementTree as ET
+from pathlib import Path
 
 import pytest
 
@@ -150,6 +151,14 @@ def test_desktop_detection_and_command(tmp_path, monkeypatch):
     script = tmp_path / "drawio"
     script.write_text("#!/usr/bin/env python3\nprint('hi')\n")
     assert desktop._is_ours(str(script))
+    launcher = tmp_path / "drawio.exe"  # pip's Windows launcher: binary stub + appended script
+    launcher.write_bytes(
+        b"MZ\x90\x00" + b"\x00" * 4096 + b"PK\x03\x04import re\nfrom drawio.__main__ import main\n"
+    )
+    assert desktop._is_ours(str(launcher))
+    import sysconfig
+
+    assert desktop._is_ours(str(Path(sysconfig.get_path("scripts")) / "drawio"))
     exe = tmp_path / "draw.io"
     exe.write_bytes(b"\x7fELF")
     monkeypatch.setenv("DRAWIO_DESKTOP", str(exe))
