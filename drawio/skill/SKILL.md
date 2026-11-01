@@ -86,14 +86,22 @@ Key facts (full reference: `references/api.md`):
 
 `drawio lint` reports, per page: `text-overflow` (label bigger than its shape),
 `overlap` / `text-overlap` / `container-overlap`, `outside-parent`, `edge-crosses-shape`,
-`edge-crosses-label`, `label-overlap`, `edges-overlap`, `unsupported-shape` (info), and
-with `--fit` also `small-text` and `aspect`. Text sizes are estimates from Helvetica
-metrics, close to draw.io's wrapping; treat a finding as real and fix it.
+`edge-crosses-label`, `label-overlap`, `edges-overlap`, `edge-hidden` (a connector
+painted under an opaque shape created after it), and the info codes `style-ignored`
+(e.g. `ellipse=1` or `fontsize`, which draw.io ignores), `unsupported-shape` and, with
+`--fit`, `aspect`; `--fit` also adds the warning `small-text`. Connector routes are those
+of draw.io's own router; text sizes are estimates from Helvetica metrics, close to
+draw.io's wrapping. Treat a warning as real and fix it.
+
+- Info lines print only with `-v`; `--json` always has everything. Narrow a run with
+  `--select edge-*,text-overflow` or `--ignore aspect`.
 
 - Text too big for its box: shorten the label, widen the box, or `page.autosize(cell)`.
   `drawio fit file.drawio --autosize` does it for a whole file.
 - Connector through a shape: add `waypoints` around it, choose ports, or move shapes.
   `drawio inspect file.drawio --json` prints every shape box and connector route.
+- Connector hidden under a shape: draw.io paints in creation order. Create the connector
+  after the shape, or give the shape `fillColor=none`.
 - A shape that encloses others is treated as a grouping backdrop, not an overlap.
 
 ## 5. Slides and documents

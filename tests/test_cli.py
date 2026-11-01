@@ -108,3 +108,18 @@ def test_cli_shapes_doctor_skill(tmp_path, capsys):
     assert main(["skill", "install", "--dest", str(tmp_path / "skills")]) == 1
     assert "--force" in capsys.readouterr().err
     assert main(["skill", "install", "--dest", str(tmp_path / "skills"), "--force"]) == 0
+
+
+def test_cli_lint_select_ignore_and_info_lines(tmp_path, capsys):
+    doc = Document()
+    page = doc.add_page("Wide", id="wide")
+    page.box("tiny", 0, 0, 2000, 100, style={"fontSize": 48, "ellipse": 1})
+    path = tmp_path / "wide.drawio"
+    doc.save(path)
+    assert main(["lint", str(path), "--fit", "8.15x4.85in"]) == 0
+    out = capsys.readouterr().out
+    assert "aspect" not in out and "-v shows the info lines" in out
+    assert main(["lint", str(path), "--fit", "8.15x4.85in", "-v"]) == 0
+    assert "[aspect]" in capsys.readouterr().out
+    assert main(["lint", str(path), "--json", "--ignore", "aspect,style-ignored"]) == 0
+    assert json.loads(capsys.readouterr().out)["issues"] == []

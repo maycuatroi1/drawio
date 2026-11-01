@@ -73,8 +73,9 @@ Pass shapes that share a parent. Call `page.fit()` afterwards.
 
 ## Checks (`drawio.lint`)
 
-`check(document, fit=None, pages=None) -> list[Issue]`; `parse_fit("8.15x4.85in",
-min_pt=12)`. `Issue` has `code, severity, page, cells, message, hint, data`.
+`check(document, fit=None, pages=None, select=None, ignore=None) -> list[Issue]`;
+`parse_fit("8.15x4.85in", min_pt=12)`. `select` / `ignore` take finding codes, with a
+trailing `*` for a prefix. `Issue` has `code, severity, page, cells, message, hint, data`.
 
 ## Rendering (`drawio.render`)
 
@@ -83,7 +84,8 @@ aspect=None, transparent=False, background=None, download=True) -> Result(path, 
 page, notes)`; `render_all(source, folder, fmt="png", **options)`.
 
 `drawio.scene.build(page)` gives absolute shape boxes, label boxes and connector routes,
-the same geometry that lint and the native renderer use.
+the same geometry that lint and the native renderer use. `drawio.routing.route(...)` is
+the connector router itself, ported from draw.io (Apache-2.0).
 
 ## Text metrics (`drawio.text`)
 
