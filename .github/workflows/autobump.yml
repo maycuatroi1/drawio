@@ -5,13 +5,24 @@ on:
     branches:
       - main
 
+# One bump at a time, so two quick merges do not both bump from the same VERSION
+concurrency:
+  group: autobump
+  cancel-in-progress: false
+
 jobs:
   bump-version:
     if: github.actor != 'github-actions'
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    outputs:
+      version: ${{ steps.bump.outputs.new_version }}
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v7
         with:
+          # The newest main, not the pushed commit: a bump that ran meanwhile is already on it
+          ref: main
           fetch-depth: 0
 
       - name: Set up Git
@@ -39,3 +50,14 @@ jobs:
           git push origin ${{ steps.bump.outputs.new_version }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # The tag above is pushed with GITHUB_TOKEN, which starts no workflow, so release.yml is called here.
+  release:
+    needs: bump-version
+    permissions:
+      contents: write
+    uses: ./.github/workflows/release.yml
+    with:
+      tag: ${{ needs.bump-version.outputs.version }}
+    secrets:
+      PYPI_API_TOKEN: ${{ secrets.PYPI_API_TOKEN }}

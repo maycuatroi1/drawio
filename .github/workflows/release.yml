@@ -1,48 +1,80 @@
 name: Upload Python Package
 
 on:
+  # A tag pushed by a person. Auto Bump Version pushes its tag with GITHUB_TOKEN, which starts no workflow,
+  # so it calls this workflow itself through workflow_call.
   push:
-    # Sequence of patterns matched against refs/tags
     tags:
-      - '*' # Push events to matching v*, i.e. v1.0, v20.15.10
+      - '[0-9]+.[0-9]+.[0-9]+'
+      - 'v[0-9]+.[0-9]+.[0-9]+'
 
-  # Allows you to run this workflow manually from the Actions tab
+  # Release an existing tag again, e.g. after a failed upload.
   workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing tag to release, e.g. 0.1.2
+        required: true
+        type: string
+
+  workflow_call:
+    inputs:
+      tag:
+        required: true
+        type: string
+    secrets:
+      PYPI_API_TOKEN:
+        required: true
+
+env:
+  TAG: ${{ inputs.tag || github.ref_name }}
 
 jobs:
   release:
-    name: Create Release
+    name: Build, publish and release
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    concurrency:
+      group: release-${{ inputs.tag || github.ref_name }}
+      cancel-in-progress: false
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v7
         with:
-          # by default, it uses a depth of 1
-          # this fetches all history so that we can read each commit
+          ref: refs/tags/${{ env.TAG }}
+          # All history and tags, so the release notes can find the previous tag
           fetch-depth: 0
-      - name: Generate Changelog
-        run: .github/release_message.sh > release_message.md
-      - name: Release
-        uses: softprops/action-gh-release@v1
-        with:
-          body_path: release_message.md
 
-  deploy:
-    needs: release
-    runs-on: ubuntu-latest
-    steps:
-    - uses: actions/checkout@v1
-    - name: Set up Python
-      uses: actions/setup-python@v1
-      with:
-        python-version: '3.x'
-    - name: Install dependencies
-      run: |
-        python -m pip install --upgrade pip
-        pip install setuptools wheel twine
-    - name: Build and publish
-      env:
-        TWINE_USERNAME: __token__
-        TWINE_PASSWORD: ${{ secrets.PYPI_API_TOKEN }}
-      run: |
-        python setup.py sdist bdist_wheel
-        twine upload dist/*
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+
+      - name: Check the tag matches drawio/VERSION
+        run: |
+          version=$(cat drawio/VERSION)
+          if [ "${TAG#v}" != "$version" ]; then
+            echo "::error::tag $TAG does not match drawio/VERSION $version"
+            exit 1
+          fi
+
+      - name: Build
+        run: |
+          python -m pip install --upgrade pip build twine
+          python -m build
+          python -m twine check --strict dist/*
+
+      - name: Publish to PyPI
+        env:
+          TWINE_USERNAME: __token__
+          TWINE_PASSWORD: ${{ secrets.PYPI_API_TOKEN }}
+        run: python -m twine upload --non-interactive --skip-existing dist/*
+
+      - name: Create the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "$TAG" > /dev/null 2>&1; then
+            echo "release $TAG exists already"
+          else
+            .github/release_message.sh "$TAG" > release_message.md
+            gh release create "$TAG" dist/* --verify-tag --title "$TAG" --notes-file release_message.md
+          fi
