@@ -95,7 +95,17 @@ def _cmd_lint(args):
     document = Document.load(args.input)
     document.validate()
     fit = parse_fit(args.fit, args.min_pt) if args.fit else None
-    issues = check(document, fit=fit, pages=args.page or None)
+
+    def codes(values):
+        return [c.strip() for v in values or [] for c in v.split(",") if c.strip()] or None
+
+    issues = check(
+        document,
+        fit=fit,
+        pages=args.page or None,
+        select=codes(args.select),
+        ignore=codes(args.ignore),
+    )
     threshold = SEVERITIES.index(args.fail_on)
     failing = [i for i in issues if SEVERITIES.index(i.severity) <= threshold]
     counts = {s: sum(i.severity == s for i in issues) for s in SEVERITIES}
@@ -109,10 +119,14 @@ def _cmd_lint(args):
         )
     else:
         for issue in issues:
+            if issue.severity == "info" and not args.verbose:
+                continue
             print(f"{issue.severity}: [{issue.code}] page {issue.page}: {issue.message}")
             if issue.hint:
                 print(f"    fix: {issue.hint}")
         summary = ", ".join(f"{n} {s}(s)" for s, n in counts.items() if n)
+        if counts["info"] and not args.verbose:
+            summary += " (-v shows the info lines)"
         print(f"{args.input}: {summary or 'no layout problems found'}")
     return 1 if failing else 0
 
@@ -332,6 +346,11 @@ def _parser():
         " smaller than --min-pt",
     )
     lint.add_argument("--min-pt", type=float, default=12)
+    lint.add_argument(
+        "--select", action="append", help="Only these codes (comma list; edge-* for a prefix)"
+    )
+    lint.add_argument("--ignore", action="append", help="Drop these codes (comma list)")
+    lint.add_argument("-v", "--verbose", action="store_true", help="Also print info findings")
     lint.add_argument(
         "--fail-on",
         choices=["error", "warning", "info"],

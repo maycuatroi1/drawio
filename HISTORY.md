@@ -1,5 +1,15 @@
 # Unreleased
 
+- Route connectors exactly as draw.io does: `drawio/routing.py` ports mxGraph's
+  OrthConnector, SegmentConnector, elbow connectors and perimeters (Apache-2.0). Native
+  renders and lint now follow the editor for unpinned orthogonal connectors and for
+  waypoints that are off the line of a port; tests compare against routes recorded from
+  draw.io.
+- Lint: `edge-hidden` for connectors painted under an opaque shape created after them;
+  `style-ignored` (info) for properties draw.io ignores, such as `ellipse=1`; text boxes
+  collide by their glyphs, not their line boxes; `--select`, `--ignore` and `-v`.
+- Labels collapse runs of spaces as draw.io does.
+
 - Render pages to PNG, SVG, PDF and JPEG on any OS: a built-in native renderer (SVG
   with no dependencies, raster through Pillow), the draw.io desktop exporter, or the
   official diagrams.net viewer in a headless browser.

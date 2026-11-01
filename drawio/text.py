@@ -33,6 +33,7 @@ _BOLD = (
 _AVERAGE = 556
 LINE_HEIGHT = 1.2  # draw.io's mxConstants.LINE_HEIGHT
 _TAG = re.compile(r"<[^>]*>")
+_SPACES = re.compile(r"[ \t]+")
 _BREAK = re.compile(r"<\s*br\s*/?\s*>|</\s*(?:div|p|li|h[1-6])\s*>", re.IGNORECASE)
 
 
@@ -70,11 +71,13 @@ def text_width(text: str, size: float, *, bold: bool = False, family: str = "Hel
 
 
 def plain(value: str, *, html_label: bool = False) -> str:
-    """Return the visible text of a label, turning HTML breaks into newlines."""
-    if not html_label:
-        return value
-    text = _BREAK.sub("\n", value)
-    return html.unescape(_TAG.sub("", text)).replace("\xa0", " ").strip("\n")
+    """The text a label shows: HTML breaks become newlines, and runs of spaces collapse to
+    one space, as draw.io displays them."""
+    if html_label:
+        value = _BREAK.sub("\n", value.replace("\r", "").replace("\n", " "))
+        value = html.unescape(_TAG.sub("", value))
+    lines = [_SPACES.sub(" ", line).strip(" \t") for line in value.split("\n")]
+    return "\n".join(lines).replace("\xa0", " ").strip("\n")
 
 
 def wrap(

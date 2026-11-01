@@ -126,13 +126,16 @@ doc.save("flow.drawio", overwrite=True)
 ```sh
 drawio lint flow.drawio                     # exit status 1 when something is wrong
 drawio lint deck.drawio --fit 8.15x4.85in   # also: text below 12 pt once placed on a slide
+drawio lint flow.drawio --ignore aspect -v  # pick codes with --select/--ignore; -v prints info
 drawio inspect flow.drawio --json           # every shape box and connector route
 ```
 
 Lint reports overflowing labels, overlapping shapes and labels, connectors that run
-through shapes or labels, children outside containers, and (with `--fit`) text that
-ends up too small and aspect-ratio mismatches. Text widths are estimated from
-Helvetica/Arial metrics, close to draw.io's wrapping.
+through shapes or labels or hide under a shape painted after them, children outside
+containers, style properties draw.io ignores, and (with `--fit`) text that ends up too
+small and aspect-ratio mismatches. Connector routes come from a port of draw.io's own
+router (`drawio/routing.py`, checked against the diagrams.net viewer); text widths are
+estimated from Helvetica/Arial metrics, close to draw.io's wrapping.
 
 ## Render
 
@@ -246,3 +249,9 @@ Tests write real XML, render with the native backend and run examples in
 temporary directories. They do not install packages, download browser drivers, or
 launch Chrome. See
 [the API reference](docs/index.md) and [contribution guide](CONTRIBUTING.md).
+
+## License
+
+drawio-python is released into the public domain (see `LICENSE`), except
+`drawio/routing.py`, a port of connector routing from mxGraph by JGraph Ltd, which is
+under the Apache License 2.0 (`LICENSES/Apache-2.0.txt`).

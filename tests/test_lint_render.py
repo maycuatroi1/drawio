@@ -1,3 +1,4 @@
+import json
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
@@ -13,24 +14,52 @@ def codes(document, **kwargs):
     return sorted({issue.code for issue in check(document, **kwargs)})
 
 
-def test_routes_follow_draw_io_cases():
+def _collapse(points):
+    out = []
+    for p in points:
+        p = [round(p[0], 1), round(p[1], 1)]
+        if out and abs(out[-1][0] - p[0]) < 0.05 and abs(out[-1][1] - p[1]) < 0.05:
+            continue
+        if len(out) >= 2:
+            a, b = out[-2], out[-1]
+            if (abs(a[0] - b[0]) < 0.05 and abs(b[0] - p[0]) < 0.05) or (
+                abs(a[1] - b[1]) < 0.05 and abs(b[1] - p[1]) < 0.05
+            ):
+                out[-1] = p
+                continue
+        out.append(p)
+    return out
+
+
+def test_routes_match_draw_io():
+    """Routes recorded from draw.io's own router (the diagrams.net viewer) on random cases:
+    straight, orthogonal with and without ports and waypoints, elbow, ellipse, rhombus and
+    nested shapes."""
+    cases = json.loads((Path(__file__).parent / "data" / "drawio_routes.json").read_text())
+    assert len(cases) >= 80
+    for case in cases:
+        scene = build(Document.from_xml(case["xml"]).pages[0])
+        mine = _collapse(scene.connectors[0].points)
+        truth = _collapse(case["drawio"])
+        assert len(mine) == len(truth), (case["kind"], mine, truth)
+        for p, q in zip(mine, truth):
+            assert abs(p[0] - q[0]) <= 1.5 and abs(p[1] - q[1]) <= 1.5, (case["kind"], mine, truth)
+
+
+def test_routes_of_reported_cases():
     style = {"edgeStyle": "orthogonalEdgeStyle"}
-    side = route((0, 0, 100, 50), (300, 0, 100, 50), style, [])
-    assert side == [(100, 25), (300, 25)]
-    stacked = route((0, 0, 100, 50), (0, 200, 100, 50), style, [])
-    assert stacked == [(50, 50), (50, 200)]
-    diagonal = route((0, 0, 100, 50), (300, 200, 100, 50), style, [])
-    assert diagonal[0] == (100, 25) and diagonal[-1] == (300, 225)
-    assert all(a[0] == b[0] or a[1] == b[1] for a, b in zip(diagonal, diagonal[1:]))
-    ported = {**style, "exitX": "0.5", "exitY": "1", "entryX": "0.5", "entryY": "0"}
-    assert route((0, 0, 100, 50), (200, 200, 100, 50), ported, [])[0] == (50, 50)
-    via = route((0, 0, 100, 50), (300, 0, 100, 50), style, [(200, 150)])
-    assert any(
-        min(a[0], b[0]) <= 200 <= max(a[0], b[0]) and a[1] == b[1] == 150
-        for a, b in zip(via, via[1:])
-    )
-    straight = route((0, 0, 100, 100), (300, 0, 100, 100), {}, [])
-    assert straight == [(100, 50), (300, 50)]
+    # Unpinned connectors bend halfway between facing sides, or form an L.
+    assert route((0, 0, 120, 60), (300, 20, 200, 160), style, []) == [
+        (120, 30), (210, 30), (210, 100), (300, 100)
+    ]  # fmt: skip
+    assert route((0, 220, 200, 70), (300, 300, 160, 80), style, []) == [
+        (200, 255), (380, 255), (380, 300)
+    ]  # fmt: skip
+    # A waypoint off the line of the exit port: draw.io runs along the side to reach it.
+    ported = {**style, "exitX": "0.25", "exitY": "1", "entryX": "0.5", "entryY": "0"}
+    assert route((100, 0, 200, 80), (0, 260, 160, 80), ported, [(200, 170), (80, 170)]) == [
+        (150, 80), (200, 80), (200, 170), (80, 170), (80, 260)
+    ]  # fmt: skip
 
 
 def test_clean_diagram_has_no_findings():
@@ -227,3 +256,36 @@ def test_real_overlaps_with_round_shapes_are_reported():
     page.ellipse("A", 0, 0, 100, 100)
     page.box("B", 40, 40, 100, 100)
     assert codes(doc) == ["overlap"]
+
+
+def test_hidden_connector_and_ignored_styles():
+    doc = Document()
+    page = doc.add_page("Hidden")
+    white = {"fillColor": "#ffffff", "strokeColor": "#ffffff"}
+    page.box("Client", 0, 0, 160, 60)
+    page.box("Server", 500, 0, 160, 60)
+    a1 = page.box("", 79, 159, 2, 2, id="a1", style=white)
+    a2 = page.box("", 579, 159, 2, 2, id="a2", style=white)
+    page.connect(a1, a2, id="msg")
+    page.text("REQUEST  hello", 100, 114, 460, 48, id="lbl", style=white)  # covers the arrow
+    page.box("Router", 0, 300, 120, 60, id="router", style={"ellipse": 1, "fontsize": 20})
+    found = check(doc)
+    hidden = [i for i in found if i.code == "edge-hidden"]
+    assert hidden and hidden[0].cells == ["msg", "lbl"]
+    ignored = [i for i in found if i.code == "style-ignored"]
+    assert {i.message.split("'")[1] for i in ignored} == {"ellipse=1", "fontsize"}
+    assert all(i.severity == "info" for i in ignored)
+    assert [i.code for i in check(doc, select=["edge-*"])] == ["edge-hidden"]
+    assert "style-ignored" not in {i.code for i in check(doc, ignore=["style-ignored"])}
+
+
+def test_text_boxes_collide_by_ink_and_spaces_collapse():
+    doc = Document()
+    page = doc.add_page("Ink")
+    white = {"fillColor": "#ffffff", "strokeColor": "#ffffff", "align": "left"}
+    page.box("X", 495, 520, 160, 100, style={**white, "fontSize": 72})
+    page.box("lost", 485, 600, 180, 70, style={**white, "fontSize": 40})
+    assert check(doc) == []
+    spaced = page.box("NAME  description", 0, 0, 360, 60)
+    label = build(page).shapes[-1].label
+    assert spaced.text == "NAME description" and label.lines == ["NAME description"]

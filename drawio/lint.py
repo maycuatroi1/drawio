@@ -203,7 +203,7 @@ def check_scene(scene: Scene, fit: Optional[Fit] = None) -> list[Issue]:
 
     def footprint(shape: Shape) -> Box:
         if shape.id in textlike:
-            return shape.label.box if shape.label else (shape.box[0], shape.box[1], 0, 0)
+            return _ink(shape.label) if shape.label else (shape.box[0], shape.box[1], 0, 0)
         return shape.box
 
     def kind(shape: Shape) -> str:
@@ -425,6 +425,57 @@ def check_scene(scene: Scene, fit: Optional[Fit] = None) -> list[Issue]:
                     )
                 )
 
+    # Connectors covered by an opaque shape drawn after them (draw.io paints in order).
+    for edge in connectors:
+        total = sum(math.dist(a, b) for a, b in zip(edge.points, edge.points[1:]))
+        if total <= 0:
+            continue
+        ends = {e for e in (edge.source, edge.target) if e}
+        protected = set(ends)
+        for end in ends:
+            protected |= lineage.get(end, set())
+        for shape in shapes:
+            if shape.id in protected or depth[shape.id] < depth[edge.id] or not _opaque(shape):
+                continue
+            box = _shrink(shape.box, 1)  # a connector along the outline stays visible
+            if shape.kind in _ROUND:
+                box = _shrink(box, min(box[2], box[3]) * 0.15)
+            hidden = sum(_inside_length(a, b, box) for a, b in zip(edge.points, edge.points[1:]))
+            # Half the line, or the arrow head: a mark placed over a short stretch on purpose
+            # (a cross on a broken link) is not reported.
+            if hidden >= total * 0.5 or _contains_point(box, edge.points[-1]):
+                issues.append(
+                    Issue(
+                        "edge-hidden",
+                        "warning",
+                        page,
+                        [edge.id, shape.id],
+                        f"Connector {edge.id} is drawn under {_name(shape)}, which covers"
+                        f" {hidden:.0f} of its {total:.0f} px"
+                        + (
+                            " including the arrow head."
+                            if _contains_point(box, edge.points[-1])
+                            else "."
+                        ),
+                        "draw.io paints cells in order: create the connector after the shape, give"
+                        " the shape fillColor=none, or move it off the route.",
+                        {"route": [list(p) for p in edge.points], "shape": _round(shape.box)},
+                    )
+                )
+
+    for item in scene.items:
+        for problem in _style_problems(item.style):
+            issues.append(
+                Issue(
+                    "style-ignored",
+                    "info",
+                    page,
+                    [item.id],
+                    f"draw.io ignores the style property {problem[0]!r} on {item.id}.",
+                    problem[1],
+                )
+            )
+
     for shape in shapes:
         if not shape.known:
             issues.append(
@@ -518,13 +569,112 @@ def _name(shape: Shape) -> str:
     return shape.id
 
 
-def check(document, *, fit: Optional[Fit] = None, pages=None) -> list[Issue]:
-    """Run every layout check on a Document (or only on the pages whose IDs are given)."""
+def _ink(label: Label) -> Box:
+    """The part of a label's line boxes that glyphs cover: no leading above the first line,
+    no space under the last line's descenders."""
+    x, y, w, h = label.box
+    top, bottom = 0.18 * label.font_size, 0.09 * label.font_size
+    return x, y + top, w, max(h - top - bottom, 0)
+
+
+def _opaque(shape: Shape) -> bool:
+    if shape.kind in ("text", "image", "line") and shape.style.get("fillColor") in (None, "none"):
+        return False
+    fill = shape.style.get("fillColor", "#ffffff")
+    if fill in ("none", ""):
+        return False
+    try:
+        alpha = float(shape.style.get("opacity", 100)) * float(shape.style.get("fillOpacity", 100))
+    except ValueError:
+        alpha = 10000
+    return alpha >= 5000
+
+
+def _contains_point(box: Box, p) -> bool:
+    return box[0] < p[0] < box[0] + box[2] and box[1] < p[1] < box[1] + box[3]
+
+
+def _inside_length(a, b, box: Box) -> float:
+    """Length of segment a-b inside box (Liang-Barsky clipping)."""
+    x0, y0 = a
+    dx, dy = b[0] - x0, b[1] - y0
+    t0, t1 = 0.0, 1.0
+    for p, q in ((-dx, x0 - box[0]), (dx, box[0] + box[2] - x0),
+                 (-dy, y0 - box[1]), (dy, box[1] + box[3] - y0)):  # fmt: skip
+        if p == 0:
+            if q < 0:
+                return 0.0
+        else:
+            t = q / p
+            if p < 0:
+                t0 = max(t0, t)
+            else:
+                t1 = min(t1, t)
+    return max(0.0, t1 - t0) * math.hypot(dx, dy)
+
+
+# Shape names that only work as `shape=NAME` or as a bare style name, never as NAME=1.
+_SHAPE_KEYS = {
+    "ellipse", "doubleEllipse", "rhombus", "triangle", "cloud", "hexagon", "cylinder",
+    "swimlane", "image", "line", "text", "actor", "process", "note", "card", "step",
+    "document", "parallelogram", "trapezoid", "circle", "diamond",
+}  # fmt: skip
+# Common style properties, to catch case mistakes such as fontsize for fontSize.
+_KNOWN_KEYS = {
+    "fillColor", "strokeColor", "fontColor", "fontSize", "fontFamily", "fontStyle",
+    "strokeWidth", "dashed", "dashPattern", "rounded", "arcSize", "absoluteArcSize",
+    "whiteSpace", "html", "align", "verticalAlign", "labelPosition", "verticalLabelPosition",
+    "spacing", "spacingTop", "spacingLeft", "spacingRight", "spacingBottom", "opacity",
+    "fillOpacity", "strokeOpacity", "textOpacity", "shadow", "glass", "gradientColor",
+    "gradientDirection", "edgeStyle", "curved", "endArrow", "startArrow", "endFill",
+    "startFill", "endSize", "startSize", "exitX", "exitY", "entryX", "entryY", "exitDx",
+    "exitDy", "entryDx", "entryDy", "exitPerimeter", "entryPerimeter", "labelBackgroundColor",
+    "labelBorderColor", "container", "collapsible", "recursiveResize", "shape", "perimeter",
+    "aspect", "image", "imageAspect", "direction", "rotation", "flipH", "flipV", "size",
+    "fixedSize", "boundedLbl", "backgroundOutline", "horizontal", "jettySize", "elbow",
+    "orthogonalLoop", "noLabel", "editable", "movable", "resizable", "deletable",
+    "connectable", "portConstraint", "swimlaneFillColor", "swimlaneLine", "childLayout",
+}  # fmt: skip
+_BY_LOWER = {k.lower(): k for k in _KNOWN_KEYS}
+
+
+def _style_problems(style: dict) -> list[tuple[str, str]]:
+    found = []
+    for key, value in style.items():
+        if value is not None and key in _SHAPE_KEYS and key not in _KNOWN_KEYS:
+            name = {"circle": "ellipse", "diamond": "rhombus", "cylinder": "cylinder3"}.get(
+                key, key
+            )
+            found.append((f"{key}={value}", f"Use shape={name} (or page.box(..., shape={key!r}))."))
+        elif key not in _KNOWN_KEYS and key.lower() in _BY_LOWER:
+            found.append((key, f"Property names are case-sensitive: use {_BY_LOWER[key.lower()]}."))
+    return found
+
+
+def _wanted(code: str, select, ignore) -> bool:
+    if select and not any(code == s or code.startswith(s.rstrip("*")) for s in select):
+        return False
+    return not (ignore and any(code == s or code.startswith(s.rstrip("*")) for s in ignore))
+
+
+def check(
+    document,
+    *,
+    fit: Optional[Fit] = None,
+    pages=None,
+    select=None,
+    ignore=None,
+) -> list[Issue]:
+    """Run every layout check on a Document (or only on the pages whose IDs are given).
+
+    `select` keeps only the listed finding codes and `ignore` drops them; a trailing `*`
+    matches a prefix, e.g. ignore=["edge-*"].
+    """
     result = []
     for page in document.pages:
         if pages and page.id not in pages and page.name not in pages:
             continue
-        result.extend(check_scene(build(page), fit))
+        result.extend(i for i in check_scene(build(page), fit) if _wanted(i.code, select, ignore))
     return result
 
 
